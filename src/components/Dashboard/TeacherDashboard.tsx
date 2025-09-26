@@ -103,12 +103,21 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
   return distance;
 };
 
-// Fixed location configuration (REPLACE WITH YOUR ACTUAL COORDINATES)
-const FIXED_LOCATION = {
-  latitude: 20.296499, // Replace with your school's latitude
-  longitude: 85.835776 // Replace with your school's longitude
+interface SchoolLocation {
+  latitude: number;
+  longitude: number;
+  radius: number;
+  address: string;
+  last_updated: string;
+}
+
+const DEFAULT_LOCATION = {
+  latitude: 20.356311447215322,
+  longitude: 85.82185019047664,
+  radius: 200,
+  address: "Default School Location",
+  last_updated: new Date().toISOString()
 };
-const ALLOWED_RADIUS_METERS = 200;
 
 interface AttendanceRecord {
   id: string;
@@ -213,6 +222,9 @@ export function TeacherDashboard() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [detailedView, setDetailedView] = useState<'attendance' | 'leaves' | 'students' | null>(null);
   const [processingLeaves, setProcessingLeaves] = useState<Set<string>>(new Set());
+  const [schoolLocation, setSchoolLocation] = useState<any>(null);
+  const [locationPermissionAsked, setLocationPermissionAsked] = useState(false);
+
   
   const [leaveBalance, setLeaveBalance] = useState<LeaveQuota>({
     casual: 12,
@@ -237,12 +249,32 @@ export function TeacherDashboard() {
   const LEAVES_PER_PAGE = 10;
   const isLoadingRef = useRef(false);
 
+
+    const loadSchoolLocation = async () => {
+    try {
+      const locationDoc = await getDoc(doc(db, 'school_settings', 'location'));
+      if (locationDoc.exists()) {
+        const locationData = locationDoc.data() as SchoolLocation;
+        setSchoolLocation(locationData);
+        console.log('School location loaded:', locationData);
+      } else {
+        // Create default location if it doesn't exist
+        await setDoc(doc(db, 'school_settings', 'location'), DEFAULT_LOCATION);
+        console.log('Default school location created');
+      }
+    } catch (error) {
+      console.error('Error loading school location:', error);
+      toast.error('Error loading school location settings');
+    }
+  };
+
   useEffect(() => {
     if (user?.uid) {
       loadTeacherData();
       loadLeaveApplications();
       loadAllLeaveHistory();
       loadAnnouncements();
+      loadSchoolLocation();
     }
   }, [user]);
 
@@ -274,6 +306,22 @@ export function TeacherDashboard() {
     console.log('Leave Balance:', leaveBalance);
     console.log('All Leave History:', allLeaveHistory);
   }, [leaveApplications, leaveBalance, allLeaveHistory]);
+
+    useEffect(() => {
+    if (!locationPermissionAsked && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        () => {
+          console.log('Location permission granted');
+          setLocationPermissionAsked(true);
+        },
+        (error) => {
+          console.log('Location permission not granted:', error);
+          setLocationPermissionAsked(true);
+        },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+      );
+    }
+  }, [locationPermissionAsked]);
 
   const getDateFolderFromDateString = (dateString: string) => {
     try {
@@ -940,22 +988,26 @@ export function TeacherDashboard() {
         return;
       }
     }
+    if (!schoolLocation) {
+      toast.error("School location not configured. Please contact administrator.");
+      return;
+    }
 
     setActionLoading("check-in");
     try {
       const location = await getCurrentLocation();
       
-      // Calculate distance from fixed location
+      // Calculate distance from school location
       const distance = calculateDistance(
         location.latitude,
         location.longitude,
-        FIXED_LOCATION.latitude,
-        FIXED_LOCATION.longitude
+        schoolLocation.latitude,
+        schoolLocation.longitude
       );
       
       // Check if within allowed radius
-      if (distance > ALLOWED_RADIUS_METERS) {
-        toast.error(`You are ${Math.round(distance)} meters away from the school. Please move within ${ALLOWED_RADIUS_METERS} meters to check in.`);
+      if (distance > schoolLocation.radius) {
+        toast.error(`You are ${Math.round(distance)} meters away from the school. Please move within ${schoolLocation.radius} meters to check in.`);
         setActionLoading(null);
         return;
       }
@@ -993,6 +1045,11 @@ export function TeacherDashboard() {
         check_in_location: `${location.latitude},${location.longitude}`,
         check_in_address: address,
         distance_from_school: Math.round(distance),
+        school_location: {
+          latitude: schoolLocation.latitude,
+          longitude: schoolLocation.longitude,
+          radius: schoolLocation.radius
+        },
         created_at: now,
       });
 
@@ -1026,6 +1083,11 @@ export function TeacherDashboard() {
       return;
     }
 
+    if (!schoolLocation) {
+      toast.error("School location not configured. Please contact administrator.");
+      return;
+    }
+
     setActionLoading("check-out");
     try {
       const location = await getCurrentLocation();
@@ -1034,13 +1096,13 @@ export function TeacherDashboard() {
       const distance = calculateDistance(
         location.latitude,
         location.longitude,
-        FIXED_LOCATION.latitude,
-        FIXED_LOCATION.longitude
+        schoolLocation.latitude,
+        schoolLocation.longitude
       );
       
       // Check if within allowed radius
-      if (distance > ALLOWED_RADIUS_METERS) {
-        toast.error(`You are ${Math.round(distance)} meters away from the school. Please move within ${ALLOWED_RADIUS_METERS} meters to check out.`);
+      if (distance > schoolLocation.radius) {
+        toast.error(`You are ${Math.round(distance)} meters away from the school. Please move within ${schoolLocation.radius} meters to check out.`);
         setActionLoading(null);
         return;
       }
@@ -1611,7 +1673,7 @@ export function TeacherDashboard() {
                         <span>Location services required for attendance</span>
                       </p>
                       <p className="text-xs text-gray-500 mt-1">
-                        Must be within {ALLOWED_RADIUS_METERS} meters of school location
+                        Must be within 200 meters of school location
                       </p>
                     </div>
 

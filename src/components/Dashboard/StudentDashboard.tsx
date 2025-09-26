@@ -12,8 +12,7 @@ import {
   getDoc,
   updateDoc,
   runTransaction,
-  onSnapshot,
-  deleteField
+  onSnapshot
 } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useAuth } from '../../hooks/useAuth';
@@ -36,6 +35,7 @@ import {
   Megaphone,
   X,
   ChevronLeft,
+  ChevronRight,
   BookText,
   ClipboardList,
   RefreshCw,
@@ -43,7 +43,20 @@ import {
   Square
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { format, startOfWeek, endOfWeek, eachDayOfInterval, isToday, isSameDay, differenceInDays } from 'date-fns';
+import { 
+  format, 
+  startOfMonth, 
+  endOfMonth, 
+  startOfWeek, 
+  endOfWeek, 
+  eachDayOfInterval, 
+  isToday, 
+  isSameMonth, 
+  isSameDay,
+  differenceInDays,
+  addMonths,
+  subMonths 
+} from 'date-fns';
 
 interface StudentInfo {
   id: string;
@@ -154,6 +167,24 @@ interface CompletedAssignment {
   class_name: string;
 }
 
+interface CalendarDay {
+  date: Date;
+  isCurrentMonth: boolean;
+  isToday: boolean;
+  isHoliday: boolean;
+  isLeaveDay: boolean;
+  attendanceStatus?: 'present' | 'absent' | 'late' | 'holiday' | 'leave';
+  holidayInfo?: Holiday;
+  leaveInfo?: LeaveApplication;
+}
+
+interface Holiday {
+  date: string;
+  name: string;
+  type: 'national' | 'state' | 'religious' | 'regional' | 'public';
+  description?: string;
+}
+
 const getDateFolder = (date: Date = new Date()) => {
   const month = date.toLocaleString('default', { month: 'short' });
   const day = date.getDate();
@@ -187,11 +218,15 @@ export function StudentDashboard() {
   const [detailedView, setDetailedView] = useState<'attendance' | 'assignments' | 'materials' | 'grades' | 'schedule' | 'completed' | null>(null);
   const [classSchedules, setClassSchedules] = useState<ClassSchedule[]>([]);
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [calendarLoading, setCalendarLoading] = useState(false);
   const [leaveBalance, setLeaveBalance] = useState<LeaveQuota>({
-    casual: 0,
-    medical: 0,
-    emergency: 0,
-    personal: 0
+    casual: 10,
+    medical: 15,
+    emergency: 5,
+    personal: 5
   });
   
   const [leaveForm, setLeaveForm] = useState({
@@ -272,6 +307,172 @@ export function StudentDashboard() {
       unsubscribeFunctions.forEach(unsubscribe => unsubscribe());
     };
   }, [studentInfo]);
+
+  useEffect(() => {
+    if (recentAttendance.length > 0 && holidays.length > 0) {
+      const calendarData = generateCalendar(currentMonth, recentAttendance, holidays);
+      setCalendarDays(calendarData);
+    }
+  }, [currentMonth, recentAttendance, holidays]);
+
+  const loadHolidays = async () => {
+    try {
+      const holidaysQuery = query(collection(db, 'holidays'));
+      const holidaysSnapshot = await getDocs(holidaysQuery);
+      const holidaysData = holidaysSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as unknown as Holiday));
+
+      // Add Odisha state holidays as default
+      const odishaHolidays: Holiday[] = [
+        { date: '2025-01-14', name: 'Makar Sankranti', type: 'regional' },
+        { date: '2025-01-23', name: 'Subhas Chandra Bose Jayanti / Veer Surendra Sai Jayanti', type: 'regional' },
+        { date: '2025-01-26', name: 'Republic Day', type: 'national' },
+        { date: '2025-02-02', name: 'Vasant Panchami', type: 'regional' },
+        { date: '2025-02-26', name: 'Maha Shivaratri', type: 'religious' },
+        { date: '2025-03-05', name: 'Panchayati Raj Divas', type: 'public' },
+        { date: '2025-03-14', name: 'Dola Purnima', type: 'religious' },
+        { date: '2025-03-15', name: 'Holi', type: 'religious' },
+        { date: '2025-03-31', name: 'Id-ul-Fitr', type: 'religious' },
+        { date: '2025-04-01', name: 'Utkal Divas / Odisha Day', type: 'state' },
+        { date: '2025-04-06', name: 'Ram Navami', type: 'religious' },
+        { date: '2025-04-14', name: 'Maha Vishuba Sankranti (Maha Bishuba Sankranti)', type: 'regional' },
+        { date: '2025-04-14', name: 'Dr B. R. Ambedkar Jayanti', type: 'national' },
+        { date: '2025-04-18', name: 'Good Friday', type: 'religious' },
+        { date: '2025-04-24', name: 'Panchayati Raj Diwas (alternate in some lists)', type: 'public' },
+        { date: '2025-05-12', name: 'Buddha Purnima / Birth of Pt. Raghunath Murmu', type: 'public' },
+        { date: '2025-05-26', name: 'Savitri Amavasya', type: 'regional' },
+        { date: '2025-06-07', name: 'Id-ul-Zuha (Bakrid / Eid al Adha)', type: 'religious' },
+        { date: '2025-06-14', name: 'Pahili Raja', type: 'regional' },
+        { date: '2025-06-15', name: 'Raja Sankranti', type: 'state' },
+        { date: '2025-06-27', name: 'Ratha Yatra', type: 'regional' },
+        { date: '2025-07-06', name: 'Muharram', type: 'religious' },
+        { date: '2025-08-15', name: 'Independence Day', type: 'national' },
+        { date: '2025-08-15', name: 'Janmashtami', type: 'religious' },
+        { date: '2025-08-27', name: 'Ganesh Puja / Ganesh Chaturthi', type: 'religious' },
+        { date: '2025-08-28', name: 'Nuakhai', type: 'regional' },
+        { date: '2025-09-05', name: 'Birthday of Prophet Muhammad (Eid Milad)', type: 'religious' },
+        { date: '2025-09-29', name: 'Maha Saptami', type: 'religious' },
+        { date: '2025-09-30', name: 'Maha Astami', type: 'religious' },
+        { date: '2025-10-01', name: 'Mahanavami', type: 'religious' },
+        { date: '2025-10-02', name: 'Vijaya Dashami / Gandhi Jayanti', type: 'public' },
+        { date: '2025-10-06', name: 'Kumar Purnima', type: 'regional' },
+        { date: '2025-10-07', name: 'Kumar Purnima (alternate in some lists)', type: 'regional' },
+        { date: '2025-10-21', name: 'Diwali / Kali Puja', type: 'religious' },
+        { date: '2025-11-05', name: 'Rasa Purnima', type: 'religious' },
+        { date: '2025-12-25', name: 'Christmas Day', type: 'national' },
+      ];
+
+
+      const allHolidays = [...odishaHolidays, ...holidaysData];
+      setHolidays(allHolidays);
+      return allHolidays;
+    } catch (error) {
+      console.error('Error loading holidays:', error);
+      return [];
+    }
+  };
+  
+  const generateCalendar = (month: Date, attendanceRecords: AttendanceRecord[], holidaysList: Holiday[], leaves: LeaveApplication[] = []): CalendarDay[] => {
+      const year = month.getFullYear();
+      const monthIndex = month.getMonth();
+
+      // First day of the month
+      const firstDay = new Date(year, monthIndex, 1);
+      // Last day of the month
+      const lastDay = new Date(year, monthIndex + 1, 0);
+
+      // Start from the first Sunday of the week containing the first day
+      const startDate = new Date(firstDay);
+      startDate.setDate(firstDay.getDate() - firstDay.getDay());
+
+      // End on the last Saturday of the week containing the last day
+      const endDate = new Date(lastDay);
+      endDate.setDate(lastDay.getDate() + (6 - lastDay.getDay()));
+
+      const days: CalendarDay[] = [];
+      const currentDate = new Date(startDate);
+
+      // Helper function to check if two dates are the same day
+      const isSameDate = (date1: Date, date2: Date) => {
+        return date1.getDate() === date2.getDate() && 
+               date1.getMonth() === date2.getMonth() && 
+               date1.getFullYear() === date2.getFullYear();
+      };
+    
+      // Helper function to check if today
+      const isTodayDate = (date: Date) => {
+        const today = new Date();
+        return isSameDate(date, today);
+      };
+    
+      // FIX: Create a consistent date string format for comparison
+      const formatDateForComparison = (date: Date) => {
+        // Use local date components to avoid timezone issues
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      };
+    
+      while (currentDate <= endDate) {
+        // FIX: Use the new format function instead of toISOString()
+        const dateStr = formatDateForComparison(currentDate);
+
+        // FIX: Also ensure holiday dates are in the same format
+        const isHoliday = holidaysList.some(holiday => {
+          // Make sure holiday.date is in YYYY-MM-DD format
+          return holiday.date === dateStr;
+        });
+
+        const holidayInfo = holidaysList.find(holiday => holiday.date === dateStr);
+
+        // Check if it's a leave day (approved leaves only)
+        const leaveDay = leaves.find(leave => {
+          if (leave.status !== 'approved') return false;
+
+          const startDate = leave.start_date ? new Date(leave.start_date) : null;
+          const endDate = leave.end_date ? new Date(leave.end_date) : null;
+
+          return startDate && endDate && currentDate >= startDate && currentDate <= endDate;
+        });
+      
+        // Find attendance record for this date
+        const attendanceRecord = attendanceRecords.find(record => {
+          const recordDate = new Date(record.date);
+          return isSameDate(recordDate, currentDate);
+        });
+      
+        let attendanceStatus: 'present' | 'absent' | 'late' | 'holiday' | 'leave' | undefined;
+      
+        if (isHoliday) {
+          attendanceStatus = 'holiday';
+        } else if (leaveDay) {
+          attendanceStatus = 'leave';
+        } else if (attendanceRecord) {
+          attendanceStatus = attendanceRecord.status;
+        } else if (currentDate < new Date() && currentDate.getMonth() === monthIndex) {
+          // Only mark as absent for past dates in current month
+          attendanceStatus = 'absent';
+        }
+      
+        days.push({
+          date: new Date(currentDate),
+          isCurrentMonth: currentDate.getMonth() === monthIndex, // Add this property
+          isToday: isTodayDate(currentDate),
+          isHoliday,
+          isLeaveDay: !!leaveDay, // Add this property
+          attendanceStatus,
+          holidayInfo,
+          leaveInfo: leaveDay // Add this property
+        } as CalendarDay);
+      
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+    
+      return days;
+  };
 
   const loadLeaveBalance = async (studentId: string) => {
     try {
@@ -909,6 +1110,8 @@ export function StudentDashboard() {
         console.error("No authenticated user UID found");
         return;
       }
+      const holidaysList = await loadHolidays();
+
 
       const studentsQuery = query(
         collection(db, "students"),
@@ -952,42 +1155,50 @@ export function StudentDashboard() {
       await loadLeaveApplications(studentDoc.id, user.uid);
       await loadCompletedAssignments(studentDoc.id);
 
-      const attendanceData: AttendanceRecord[] = [];
-      const today = new Date();
+    const attendanceData: AttendanceRecord[] = [];
+    const today = new Date();
 
-      for (let i = 0; i < 30; i++) {
-        const date = new Date();
-        date.setDate(today.getDate() - i);
-        const dateFolder = getDateFolder(date);
-        const dateStr = getISODate(date);
+    for (let i = 0; i < 30; i++) {
+      const date = new Date();
+      date.setDate(today.getDate() - i);
+      const dateFolder = getDateFolder(date);
+      const dateStr = getISODate(date);
 
-        try {
-          const recordsQuery = query(
-            collection(db, 'student_attendance', dateFolder, 'records'),
-            where("student_id", "==", studentDoc.id),
-            where("date", "==", dateStr)
-          );
+      try {
+        const recordsQuery = query(
+          collection(db, 'student_attendance', dateFolder, 'records'),
+          where("student_id", "==", studentDoc.id),
+          where("date", "==", dateStr)
+        );
 
-          const recordsSnapshot = await getDocs(recordsQuery);
+        const recordsSnapshot = await getDocs(recordsQuery);
 
-          recordsSnapshot.forEach(doc => {
-            const data = doc.data();
-            attendanceData.push({
-              id: doc.id,
-              date: data.date || dateStr,
-              status: data.status || 'absent',
-              marked_at: data.marked_at || data.created_at || new Date().toISOString(),
-              dateFolder
-            } as AttendanceRecord);
-          });
-        } catch (error) {
-          console.log(`No student attendance records for ${dateFolder} or error:`, error);
-          continue;
-        }
+        recordsSnapshot.forEach(doc => {
+          const data = doc.data();
+          attendanceData.push({
+            id: doc.id,
+            date: data.date || dateStr,
+            status: data.status || 'absent',
+            marked_at: data.marked_at || data.created_at || new Date().toISOString(),
+            dateFolder
+          } as AttendanceRecord);
+        });
+      } catch (error) {
+        console.log(`No student attendance records for ${dateFolder} or error:`, error);
+        continue;
       }
+    }
 
       setRecentAttendance(attendanceData);
       console.log("Loaded attendance records:", attendanceData.length);
+      setCalendarLoading(true);
+
+      if (holidaysList.length > 0) {
+        const calendarData = generateCalendar(currentMonth, attendanceData, holidaysList);
+        setCalendarDays(calendarData);
+        console.log("Generated calendar with", calendarData.length, "days");
+      }
+      setCalendarLoading(false);
 
       if (studentInfoData.class_name && studentInfoData.class_name !== "Not assigned") {
         const assignmentsQuery = query(
@@ -1025,6 +1236,17 @@ export function StudentDashboard() {
     }
   };
 
+  const goToPreviousMonth = () => {
+    setCurrentMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+  };
+
+  const goToNextMonth = () => {
+    setCurrentMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+  };
+
+  const goToToday = () => {
+    setCurrentMonth(new Date());
+  };
   // In your Teacher Dashboard component
   const loadAnnouncements = async () => {
     try {
@@ -1165,6 +1387,45 @@ export function StudentDashboard() {
     }
   };
 
+  const calculateAttendancePercentage = (records: AttendanceRecord[], holidaysList: Holiday[]) => {
+    if (records.length === 0) return 0;
+    
+    const today = new Date();
+    const startOfAcademicYear = new Date(today.getFullYear(), 3, 1); // April 1st (academic year start)
+    
+    // Filter records for current academic year and exclude future dates
+    const validRecords = records.filter(record => {
+      const recordDate = new Date(record.date);
+      return recordDate >= startOfAcademicYear && recordDate <= today;
+    });
+
+    // Count working days (excluding holidays and weekends)
+    let workingDays = 0;
+    let presentDays = 0;
+
+    const currentDate = new Date(startOfAcademicYear);
+    while (currentDate <= today) {
+      // Skip weekends (Saturday = 6, Sunday = 0)
+      if (currentDate.getDay() !== 0 && currentDate.getDay() !== 6) {
+        const dateStr = currentDate.toISOString().split('T')[0];
+        const isHoliday = holidaysList.some(holiday => holiday.date === dateStr);
+
+        if (!isHoliday) {
+          workingDays++;
+
+          const record = validRecords.find(r => r.date === dateStr);
+          if (record && record.status === 'present') {
+            presentDays++;
+          }
+        }
+      }
+
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    return workingDays > 0 ? Math.round((presentDays / workingDays) * 100) : 0;
+  };
+
   const attendanceStats = {
     present: recentAttendance.filter(a => a.status === 'present').length,
     absent: recentAttendance.filter(a => a.status === 'absent').length,
@@ -1175,6 +1436,8 @@ export function StudentDashboard() {
   const attendancePercentage = attendanceStats.total > 0 
     ? Math.round((attendanceStats.present / attendanceStats.total) * 100)
     : 0;
+
+  // const attendancePercentage = calculateAttendancePercentage(recentAttendance, holidays);
 
   const weekStart = startOfWeek(new Date());
   const weekEnd = endOfWeek(new Date());
@@ -1188,6 +1451,7 @@ export function StudentDashboard() {
     {
       title: 'Attendance %',
       value: `${attendancePercentage}%`,
+      subtitle: 'Excluding holidays',
       icon: TrendingUp,
       color: 'from-blue-500 to-blue-600',
       bgColor: 'bg-blue-50',
@@ -1258,7 +1522,7 @@ export function StudentDashboard() {
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="bg-white rounded-2xl shadow-sm p-6 mb-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Student Dashboard</h1>
             <p className="text-gray-600 mt-1">Welcome back, {user?.profile?.full_name || 'Student'}</p>
@@ -1299,13 +1563,23 @@ export function StudentDashboard() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between mb-6 bg-white rounded-2xl shadow-sm p-2">
-        <div className="flex space-x-1">
-          {['overview', 'attendance', 'schedule', 'assignments', 'completed', 'materials', 'grades', 'announcements'].map((tab) => (
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6 bg-white rounded-2xl shadow-sm p-3">
+        {/* Tabs */}
+        <div className="flex flex-wrap gap-2">
+          {[
+            'overview',
+            'attendance',
+            'schedule',
+            'assignments',
+            'completed',
+            'materials',
+            'grades',
+            'announcements',
+          ].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === tab
                   ? 'bg-blue-500 text-white shadow-md'
                   : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
@@ -1315,13 +1589,15 @@ export function StudentDashboard() {
             </button>
           ))}
         </div>
-        <button className="flex items-center space-x-1 text-sm text-blue-600 font-medium hover:text-blue-800">
+        
+        {/* Export button */}
+        <button className="flex items-center space-x-1 text-sm text-blue-600 font-medium hover:text-blue-800 mt-3 md:mt-0">
           <Download className="w-4 h-4" />
           <span>Export Report</span>
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
         {statCards.map((stat, index) => (
           <motion.div
             key={stat.title}
@@ -1356,43 +1632,149 @@ export function StudentDashboard() {
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center space-x-3">
                 <CalendarDays className="w-6 h-6 text-blue-600" />
-                <h2 className="text-xl font-semibold text-gray-900">This Week</h2>
+                <h2 className="text-xl font-semibold text-gray-900">
+                  {format(currentMonth, 'MMMM yyyy')} Attendance Calendar
+                </h2>
               </div>
-              <button className="text-sm text-blue-600 font-medium hover:text-blue-800">
-                View Full Calendar
-              </button>
+              <div className="flex items-center space-x-2">
+                <button 
+                  onClick={goToPreviousMonth}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  disabled={calendarLoading}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button 
+                  onClick={goToToday}
+                  className="px-3 py-1 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50"
+                  disabled={calendarLoading}
+                >
+                  Today
+                </button>
+                <button 
+                  onClick={goToNextMonth}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  disabled={calendarLoading}
+                >
+                  <ChevronLeft className="w-4 h-4 rotate-180" />
+                </button>
+              </div>
             </div>
-            
-            <div className="grid grid-cols-7 gap-2">
-              {weekDays.map((day, index) => {
-                const dayAttendance = recentAttendance.find(a => 
-                  isSameDay(new Date(a.date), day)
-                );
+
+            {calendarLoading ? (
+              <div className="flex items-center justify-center h-48">
+                <div className="w-8 h-8 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+            ) : (
+              <>
+                {/* Day headers */}
+                <div className="grid grid-cols-7 gap-1 mb-2">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                    <div key={day} className="text-center text-sm font-medium text-gray-500 py-2">
+                      {day}
+                    </div>
+                  ))}
+                </div>
                 
-                return (
-                  <div 
-                    key={index} 
-                    className={`p-3 text-center rounded-xl ${
-                      isToday(day)
-                        ? 'bg-blue-500 text-white' 
-                        : 'bg-gray-100 text-gray-700'
-                    }`}
-                  >
-                    <p className="text-xs font-medium">{format(day, 'EEE')}</p>
-                    <p className="text-sm font-bold mt-1">{format(day, 'd')}</p>
-                    {dayAttendance && (
-                      <div className={`mt-2 w-3 h-3 mx-auto rounded-full ${
-                        dayAttendance.status === 'present' 
-                          ? 'bg-green-500' 
-                          : dayAttendance.status === 'late'
-                          ? 'bg-orange-500'
-                          : 'bg-red-500'
-                      }`}></div>
-                    )}
+                {/* Calendar grid */}
+                <div className="grid grid-cols-7 gap-1">
+                  {calendarDays.map((day, index) => {
+                    const isCurrentMonth = day.date.getMonth() === currentMonth.getMonth();
+
+                    let dayClass = "p-2 text-center rounded-lg text-sm font-medium transition-colors ";
+                    let statusIndicator = null;
+
+                    if (!isCurrentMonth) {
+                      dayClass += "text-gray-300 bg-gray-50 ";
+                    } else if (day.isToday) {
+                      dayClass += "bg-blue-500 text-white shadow-md ";
+                    } else if (day.isHoliday) {
+                      dayClass += "bg-red-100 text-red-800 border border-red-200 ";
+                    } else {
+                      dayClass += "text-gray-700 bg-white border border-gray-200 ";
+                    }
+
+                    // Add hover effect for current month days
+                    if (isCurrentMonth && !day.isToday && !day.isHoliday) {
+                      dayClass += "hover:bg-gray-50 hover:border-gray-300 ";
+                    }
+
+                    // Status indicator
+                    if (day.attendanceStatus && isCurrentMonth) {
+                      let indicatorColor = "";
+                      let indicatorTitle = "";
+
+                      switch (day.attendanceStatus) {
+                        case 'present':
+                          indicatorColor = "bg-green-500";
+                          indicatorTitle = "Present";
+                          break;
+                        case 'absent':
+                          indicatorColor = "bg-red-500";
+                          indicatorTitle = "Absent";
+                          break;
+                        case 'late':
+                          indicatorColor = "bg-orange-500";
+                          indicatorTitle = "Late";
+                          break;
+                        case 'holiday':
+                          indicatorColor = "bg-red-300";
+                          indicatorTitle = day.holidayInfo?.name || "Holiday";
+                          break;
+                      }
+
+                      statusIndicator = (
+                        <div 
+                          className={`w-2 h-2 mx-auto mt-1 rounded-full ${indicatorColor}`}
+                          title={indicatorTitle}
+                        ></div>
+                      );
+                    }
+
+                    return (
+                      <div 
+                        key={index}
+                        className={dayClass}
+                        title={day.holidayInfo ? `${day.holidayInfo.name} (${day.holidayInfo.type})` : 
+                               day.attendanceStatus ? `${format(day.date, 'MMM d, yyyy')} - ${day.attendanceStatus.charAt(0).toUpperCase() + day.attendanceStatus.slice(1)}` : 
+                               format(day.date, 'MMM d, yyyy')}
+                      >
+                        <div className="flex flex-col items-center justify-center h-full">
+                          <span className={day.isToday ? "font-bold" : ""}>
+                            {format(day.date, 'd')}
+                          </span>
+                          {statusIndicator}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                {/* Legend */}
+                <div className="flex flex-wrap items-center justify-center mt-4 gap-4 text-xs">
+                  <div className="flex items-center space-x-1">
+                    <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                    <span>Present</span>
                   </div>
-                );
-              })}
-            </div>
+                  <div className="flex items-center space-x-1">
+                    <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                    <span>Absent</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
+                    <span>Late</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <div className="w-3 h-3 bg-red-300 rounded-full"></div>
+                    <span>Holiday</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+                    <span>Today</span>
+                  </div>
+                </div>
+              </>
+            )}
           </motion.div>
 
           <motion.div

@@ -7,7 +7,7 @@ import {
   User as FirebaseUser,
   updateProfile
 } from 'firebase/auth';
-import { doc, setDoc, getDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, setDoc, getDoc, addDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 
 type Profile = {
@@ -23,6 +23,8 @@ type Profile = {
 export interface AuthUser extends FirebaseUser {
   profile?: Profile;
 }
+
+type AuthRole = 'student' | 'teacher' | 'admin';
 
 export function useAuth() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -56,6 +58,24 @@ export function useAuth() {
     };
   }, []);
 
+  // Add this function to validate role before login
+  const validateRole = async (email: string, selectedRole: AuthRole): Promise<boolean> => {
+    try {
+      // Query profiles collection to find user with this email and role
+      const profilesQuery = query(
+        collection(db, 'profiles'), 
+        where('email', '==', email),
+        where('role', '==', selectedRole)
+      );
+      
+      const querySnapshot = await getDocs(profilesQuery);
+      return !querySnapshot.empty;
+    } catch (error) {
+      console.error('Error validating role:', error);
+      return false;
+    }
+  };
+
   const loadUserProfile = async (firebaseUser: FirebaseUser) => {
     try {
       console.log('Loading profile for user:', firebaseUser.uid);
@@ -86,9 +106,23 @@ export function useAuth() {
     }
   };
 
-  const signIn = async (email: string, password: string) => {
+  // Update signIn function to accept and validate role
+  const signIn = async (email: string, password: string, selectedRole?: AuthRole) => {
     try {
       console.log('Attempting sign in...');
+      
+      // If role is provided, validate it first
+      if (selectedRole) {
+        const isValidRole = await validateRole(email, selectedRole);
+        if (!isValidRole) {
+          return { 
+            error: { 
+              message: `This email is not registered as a ${selectedRole} account. Please select the correct role.` 
+            } 
+          };
+        }
+      }
+
       await signInWithEmailAndPassword(auth, email, password);
       console.log('Sign in successful');
       return { error: null };
@@ -113,7 +147,7 @@ export function useAuth() {
     role: 'teacher' | 'student' | 'admin' = 'student',
     roll_no?: string,
     className?: string,
-    autoSignIn: boolean = true // New parameter to control auto sign-in
+    autoSignIn: boolean = true
   ) => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -194,5 +228,6 @@ export function useAuth() {
     signIn,
     signUp,
     signOut,
+    validateRole, // Export the validateRole function
   };
 }
